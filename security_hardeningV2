@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# CyberPatriots Linux Mint Security Hardening Script
-# Run with sudo: sudo bash security_hardening.sh
-
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,6 +12,18 @@ if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}This script must be run as root (use sudo)${NC}" 
    exit 1
 fi
+
+# ===== BACKUP IMPORTANT FILES ======
+echo -e "${YELLOW}Creating backups...${NC}"
+mkdir -p /root/security_backups_$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="/root/security_backups_$(date +%Y%m%d_%H%M%S)"
+cp /etc/passwd "$BACKUP_DIR/passwd.bak"
+cp /etc/shadow "$BACKUP_DIR/shadow.bak"
+cp /etc/sudoers "$BACKUP_DIR/sudoers.bak"
+cp /etc/ssh/sshd_config "$BACKUP_DIR/sshd_config.bak"
+cp /etc/login.defs "$BACKUP_DIR/login.defs.bak"
+cp /etc/pam.d/common-password "$BACKUP_DIR/common-password.bak"
+echo -e "${GREEN}Backups created in: $BACKUP_DIR${NC}\n"
 
 # ===== USER MANAGEMENT =====
 echo -e "${YELLOW}Step 1: Checking for unauthorized users...${NC}"
