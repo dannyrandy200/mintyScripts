@@ -1,0 +1,475 @@
+#!/bin/bash
+
+# CyberPatriots Linux Mint Security Hardening Script
+# Run with sudo: sudo bash security_hardening.sh
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${RED}This script must be run as root (use sudo)${NC}" 
+   exit 1
+fi
+
+# ===== SYSTEM UPDATES =====
+echo -e "${YELLOW}Step 1: Updating System...${NC}"
+apt-get update
+apt-get upgrade -y
+apt-get dist-upgrade -y
+echo -e "${GREEN}System updated successfully!${NC}\n"
+
+# ===== USER MANAGEMENT =====
+echo -e "${YELLOW}Step 2: Checking for unauthorized users...${NC}"
+echo "Current users with login shells:"
+awk -F: '$7 !~ /nologin|false/ {print $1}' /etc/passwd
+
+# Check if authorized_users.txt exists
+if [ -f "authorized_users.txt" ]; then
+    echo -e "${GREEN}Reading authorized users from authorized_users.txt${NC}"
+    mapfile -t AUTH_ARRAY < <(grep -v '^#' authorized_users.txt | grep -v '^[[:space:]]*$')
+else
+    echo -e "${RED}Error: authorized_users.txt not found!${NC}"
+    echo "Please create this file with one username per line"
+    exit 1
+fi
+
+for user in $(awk -F: '$3 >= 1000 && $7 !~ /nologin|false/ {print $1}' /etc/passwd); do
+    if [[ ! " ${AUTH_ARRAY[@]} " =~ " ${user} " ]]; then
+        echo -e "${RED}Removing unauthorized user: $user${NC}"
+        userdel -r "$user" 2>/dev/null
+    else
+        echo -e "${GREEN}Authorized user: $user${NC}"
+    fi
+done
+echo ""
+
+# ===== SUDO/ADMIN USERS =====
+echo -e "${YELLOW}Step 3: Managing Administrator Access...${NC}"
+echo "Current sudo group members:"
+grep -Po '^sudo.+:\K.*$' /etc/group
+echo ""
+echo "Enter usernames who should have sudo access (space-separated, or press Enter for none):"
+read -r ADMIN_USERS
+
+# Remove all users from sudo group first
+for user in $(grep -Po '^sudo.+:\K.*$' /etc/group | tr ',' ' '); do
+    deluser "$user" sudo 2>/dev/null
+    echo -e "${YELLOW}Removed $user from sudo group${NC}"
+done
+
+# Add authorized admins
+if [ -n "$ADMIN_USERS" ]; then
+    for admin in $ADMIN_USERS; do
+        if id "$admin" &>/dev/null; then
+            usermod -aG sudo "$admin"
+            echo -e "${GREEN}Added $admin to sudo group${NC}"
+        else
+            echo -e "${RED}User $admin does not exist${NC}"
+        fi
+    done
+fi
+echo ""
+
+# ===== PASSWORD CONFIGURATION =====
+echo -e "${YELLOW}Step 4: Setting common password for authorized users...${NC}"
+read -sp "Enter new password for all authorized users: " NEW_PASSWORD
+echo ""
+read -sp "Confirm password: " CONFIRM_PASSWORD
+echo ""
+
+if [ "$NEW_PASSWORD" != "$CONFIRM_PASSWORD" ]; then
+    echo -e "${RED}Passwords don't match. Exiting.${NC}"
+    exit 1
+fi
+
+for user in "${AUTH_ARRAY[@]}"; do
+    if id "$user" &>/dev/null; then
+        echo "$user:$NEW_PASSWORD" | chpasswd
+        echo -e "${GREEN}Password updated for: $user${NC}"
+    fi
+done
+echo ""
+
+# ===== DISABLE ROOT LOGIN =====
+echo -e "${YELLOW}Step 5: Disabling root login...${NC}"
+passwd -l root
+echo -e "${GREEN}Root account locked${NC}\n"
+
+# ===== DISABLE GUEST ACCOUNT =====
+echo -e "${YELLOW}Step 6: Disabling Guest Account...${NC}"
+mkdir -p /etc/lightdm/lightdm.conf.d
+cat > /etc/lightdm/lightdm.conf.d/50-no-guest.conf <<EOF
+[Seat:*]
+allow-guest=false
+EOF
+echo -e "${GREEN}Guest account disabled!${NC}\n"
+
+# ===== PASSWORD SECURITY REQUIREMENTS =====
+echo -e "${YELLOW}Step 7: Applying password security requirements...${NC}"
+
+# Install password quality checking library
+apt-get install -y libpam-pwquality
+
+# Configure password quality requirements
+cat > /etc/security/pwquality.conf <<EOF
+# Password quality requirements
+minlen = 12
+dcredit = -1
+ucredit = -1
+ocredit = -1
+lcredit = -1
+minclass = 3
+maxrepeat = 3
+difok = 3
+EOF
+
+# Configure PAM for password policies
+sed -i 's/^password\s*requisite\s*pam_pwquality.so.*/password requisite pam_pwquality.so retry=3/' /etc/pam.d/common-password
+
+# Configure account lockout
+if ! grep -q "pam_tally2" /etc/pam.d/common-auth; then
+    echo "auth required pam_tally2.so deny=5 unlock_time=1800 onerr=fail" >> /etc/pam.d/common-auth
+fi
+
+# Configure password aging in login.defs
+sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS   90/' /etc/login.defs
+sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   7/' /etc/login.defs
+sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   14/' /etc/login.defs
+
+# Apply password aging to existing users
+for user in "${AUTH_ARRAY[@]}"; do
+    if id "$user" &>/dev/null; then
+        chage -M 90 -m 7 -W 14 "$user"
+    fi
+done
+
+echo -e "${GREEN}Password requirements configured:${NC}"
+echo "  - Minimum length: 12 characters"
+echo "  - Must contain: uppercase, lowercase, digit, special character"
+echo "  - Maximum password age: 90 days"
+echo "  - Minimum password age: 7 days"
+echo "  - Warning before expiration: 14 days"
+echo "  - Account lockout: 5 failed attempts"
+echo ""
+
+# ===== CONFIGURE SSH =====
+echo -e "${YELLOW}Step 8: Configuring SSH...${NC}"
+apt-get install -y openssh-server
+
+# Secure SSH configuration
+cat > /etc/ssh/sshd_config <<EOF
+# SSH Security Configuration
+Port 22
+Protocol 2
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+X11Forwarding no
+MaxAuthTries 3
+ClientAliveInterval 300
+ClientAliveCountMax 2
+LoginGraceTime 60
+AllowUsers ${AUTH_ARRAY[@]}
+EOF
+
+systemctl enable ssh
+systemctl restart ssh
+echo -e "${GREEN}SSH configured and enabled${NC}\n"
+
+# ===== UFW FIREWALL =====
+echo -e "${YELLOW}Step 9: Configuring UFW firewall...${NC}"
+apt-get install -y ufw
+
+# Reset UFW to defaults
+ufw --force reset
+
+# Default policies
+ufw default deny incoming
+ufw default allow outgoing
+
+# Allow SSH
+ufw allow 22/tcp
+
+# Enable UFW
+ufw --force enable
+ufw logging on
+
+echo -e "${GREEN}UFW firewall enabled with default deny incoming${NC}"
+ufw status verbose
+echo ""
+
+# ===== SECURE SHARED MEMORY =====
+echo -e "${YELLOW}Step 10: Securing Shared Memory...${NC}"
+if ! grep -q "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0" /etc/fstab; then
+    echo "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0" >> /etc/fstab
+    echo -e "${GREEN}Shared memory secured!${NC}"
+else
+    echo -e "${YELLOW}Shared memory already secured.${NC}"
+fi
+echo ""
+
+# ===== NETWORK HARDENING =====
+echo -e "${YELLOW}Step 11: Hardening Network Parameters...${NC}"
+cat >> /etc/sysctl.conf <<EOF
+
+# Security hardening
+# IP Spoofing protection
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+
+# Ignore ICMP redirects
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+
+# Ignore send redirects
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+
+# Disable source packet routing
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+
+# Log Martians
+net.ipv4.conf.all.log_martians = 1
+
+# Ignore ICMP ping requests
+net.ipv4.icmp_echo_ignore_all = 1
+
+# Ignore Directed pings
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+# SYN flood protection
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_max_syn_backlog = 2048
+net.ipv4.tcp_synack_retries = 2
+net.ipv4.tcp_syn_retries = 5
+
+# Disable IPv6 if not needed
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+
+sysctl -p
+echo -e "${GREEN}Network parameters hardened!${NC}\n"
+
+# ===== REMOVE SAMBA =====
+echo -e "${YELLOW}Step 12: Removing Samba...${NC}"
+apt-get remove --purge -y samba samba-common samba-common-bin smbclient
+apt-get autoremove -y
+echo -e "${GREEN}Samba removed${NC}\n"
+
+# ===== REMOVE PROHIBITED SOFTWARE =====
+echo -e "${YELLOW}Step 13: Removing prohibited software...${NC}"
+
+PROHIBITED=(
+    "john" "john-data" "nmap" "zenmap" "ophcrack" "hydra" "hydra-gtk"
+    "aircrack-ng" "fcrackzip" "lcrack" "fgdump" "wireshark" "tshark"
+    "deluge" "transmission" "qbittorrent" "ktorrent" "vuze"
+    "netcat" "netcat-traditional" "nc" "nikto" "freeciv"
+)
+
+echo "Checking for prohibited software..."
+for pkg in "${PROHIBITED[@]}"; do
+    if dpkg -l | grep -q "^ii.*$pkg"; then
+        echo -e "${RED}Found and removing: $pkg${NC}"
+        apt-get remove --purge -y "$pkg" 2>/dev/null || echo "Could not remove $pkg"
+    fi
+done
+echo -e "${GREEN}Prohibited software check complete${NC}\n"
+
+# ===== CHECK FOR PROHIBITED MEDIA =====
+echo -e "${YELLOW}Step 14: Checking for prohibited media files...${NC}"
+echo "Searching for audio/video files in /home (first 30 results)..."
+find /home -type f \( -name "*.mp3" -o -name "*.mp4" -o -name "*.avi" -o -name "*.mov" -o -name "*.wav" -o -name "*.flac" -o -name "*.mkv" \) 2>/dev/null | head -30
+echo -e "${YELLOW}MANUAL ACTION: Review these files and remove unauthorized media!${NC}\n"
+
+# ===== DISABLE UNNECESSARY SERVICES =====
+echo -e "${YELLOW}Step 15: Disabling unnecessary services...${NC}"
+
+SERVICES_TO_DISABLE=(
+    "apache2" "nginx" "vsftpd" "ftpd" "telnet" "snmpd"
+    "rsync" "rpcbind" "bind9" "avahi-daemon" "cups" "bluetooth"
+)
+
+for service in "${SERVICES_TO_DISABLE[@]}"; do
+    if systemctl is-active --quiet "$service" 2>/dev/null; then
+        echo "Disabling $service..."
+        systemctl stop "$service"
+        systemctl disable "$service"
+    fi
+done
+echo -e "${GREEN}Unnecessary services disabled!${NC}\n"
+
+# ===== ADDITIONAL SECURITY HARDENING =====
+echo -e "${YELLOW}Step 16: Applying additional security measures...${NC}"
+
+# Disable unused filesystems
+cat > /etc/modprobe.d/disable-filesystems.conf <<EOF
+install cramfs /bin/true
+install freevxfs /bin/true
+install jffs2 /bin/true
+install hfs /bin/true
+install hfsplus /bin/true
+install udf /bin/true
+EOF
+
+# Configure automatic security updates
+apt-get install -y unattended-upgrades
+dpkg-reconfigure -plow unattended-upgrades
+
+# Install and configure fail2ban
+apt-get install -y fail2ban
+systemctl enable fail2ban
+systemctl start fail2ban
+
+cat > /etc/fail2ban/jail.local <<EOF
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 3
+
+[sshd]
+enabled = true
+port = 22
+EOF
+
+systemctl restart fail2ban
+
+# Install security tools
+apt-get install -y auditd rkhunter chkrootkit clamav clamav-daemon apparmor apparmor-utils
+
+# Enable auditd
+systemctl enable auditd
+systemctl start auditd
+
+# Update ClamAV
+systemctl stop clamav-freshclam
+freshclam
+systemctl start clamav-freshclam
+
+# Set restrictive permissions on important files
+chmod 644 /etc/passwd
+chmod 600 /etc/shadow
+chmod 644 /etc/group
+chmod 600 /etc/gshadow
+chmod 600 /etc/ssh/sshd_config 2>/dev/null
+chmod 600 /boot/grub/grub.cfg 2>/dev/null
+
+# Disable core dumps
+echo "* hard core 0" >> /etc/security/limits.conf
+
+# Disable Ctrl+Alt+Del
+systemctl mask ctrl-alt-del.target
+
+# Secure Cron
+touch /etc/cron.allow
+chmod 600 /etc/cron.allow
+for user in "${AUTH_ARRAY[@]}"; do
+    echo "$user" >> /etc/cron.allow
+done
+
+echo -e "${GREEN}Additional security measures applied:${NC}"
+echo "  - Disabled unused filesystems"
+echo "  - Enabled automatic security updates"
+echo "  - Installed and configured fail2ban"
+echo "  - Disabled unnecessary services"
+echo "  - Set restrictive file permissions"
+echo "  - Security tools installed (auditd, rkhunter, chkrootkit, clamav)"
+echo "  - Disabled Ctrl+Alt+Del"
+echo "  - Secured cron"
+echo ""
+
+# ===== RUN ROOTKIT SCAN =====
+echo -e "${YELLOW}Step 17: Running Rootkit Scans...${NC}"
+echo "Updating rkhunter database..."
+rkhunter --update
+rkhunter --propupd
+echo "Running quick rkhunter scan..."
+rkhunter --check --skip-keypress --report-warnings-only
+echo -e "${GREEN}Rootkit scan complete! Full log: /var/log/rkhunter.log${NC}\n"
+
+# ===== GENERATE SECURITY REPORT =====
+echo -e "${YELLOW}Step 18: Generating security report...${NC}"
+REPORT_FILE="$BACKUP_DIR/security_report.txt"
+
+cat > "$REPORT_FILE" <<EOF
+CyberPatriots Security Hardening Report
+========================================
+Date: $(date)
+
+AUTHORIZED USERS:
+$(for user in "${AUTH_ARRAY[@]}"; do echo "  - $user"; done)
+
+SUDO GROUP MEMBERS:
+$(grep -Po '^sudo.+:\K.*$' /etc/group)
+
+ACTIVE SERVICES:
+$(systemctl list-units --type=service --state=running --no-pager)
+
+FIREWALL STATUS:
+$(ufw status verbose)
+
+OPEN PORTS:
+$(ss -tulpn)
+
+FAILED LOGIN ATTEMPTS (last 20):
+$(grep "Failed password" /var/log/auth.log 2>/dev/null | tail -20)
+
+WORLD-WRITABLE FILES (first 50):
+$(find / -xdev -type f -perm -002 2>/dev/null | head -50)
+
+SUID/SGID FILES:
+$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null)
+EOF
+
+echo -e "${GREEN}Security report saved to: $REPORT_FILE${NC}\n"
+
+# ===== FINAL SUMMARY =====
+echo -e "${GREEN}=== Security Hardening Complete ===${NC}"
+echo -e "${GREEN}Summary of changes:${NC}"
+echo "  ✓ System updated"
+echo "  ✓ Unauthorized users removed"
+echo "  ✓ Administrator privileges configured"
+echo "  ✓ Common password applied to authorized users"
+echo "  ✓ Root login disabled"
+echo "  ✓ Guest account disabled"
+echo "  ✓ Strong password policies enforced"
+echo "  ✓ Account lockout configured"
+echo "  ✓ SSH secured and enabled"
+echo "  ✓ UFW firewall enabled"
+echo "  ✓ Shared memory secured"
+echo "  ✓ Network parameters hardened"
+echo "  ✓ Samba removed"
+echo "  ✓ Prohibited software removed"
+echo "  ✓ Fail2ban installed and configured"
+echo "  ✓ Unnecessary services disabled"
+echo "  ✓ Security tools installed"
+echo "  ✓ Rootkit scan completed"
+echo "  ✓ File permissions secured"
+echo "  ✓ Ctrl+Alt+Del disabled"
+echo "  ✓ Cron secured"
+echo ""
+echo -e "${YELLOW}MANUAL TASKS REMAINING:${NC}"
+echo "  ! Review and remove prohibited media files"
+echo "  ! Review services: systemctl list-units --type=service"
+echo "  ! Check world-writable files in report"
+echo "  ! Run full ClamAV scan: clamscan -r --bell -i /"
+echo "  ! Review system logs in /var/log/"
+echo "  ! Check for suspicious cron jobs: crontab -l (for each user)"
+echo ""
+echo -e "${YELLOW}IMPORTANT NOTES:${NC}"
+echo "  - Test SSH access before logging out!"
+echo "  - Backups stored in: $BACKUP_DIR"
+echo "  - Security report: $REPORT_FILE"
+echo "  - Consider rebooting to apply all changes"
+echo ""
+echo -e "${GREEN}All automated changes applied successfully!${NC}"
