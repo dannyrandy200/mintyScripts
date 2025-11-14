@@ -48,24 +48,10 @@ for user in $(awk -F: '$3 >= 1000 && $7 !~ /nologin|false/ {print $1}' /etc/pass
 done
 echo ""
 
-# ===== PASSWORD CONFIGURATION =====
-echo -e "${YELLOW}Step 4: Setting common password for authorized users...${NC}"
-read -sp "Enter new password for all authorized users: " NEW_PASSWORD
-echo ""
-read -sp "Confirm password: " CONFIRM_PASSWORD
-echo ""
-
-if [ "$NEW_PASSWORD" != "$CONFIRM_PASSWORD" ]; then
-    echo -e "${RED}Passwords don't match. Exiting.${NC}"
-    exit 1
-fi
-
-for user in "${AUTH_ARRAY[@]}"; do
-    if id "$user" &>/dev/null; then
-        echo "$user:$NEW_PASSWORD" | chpasswd
-        echo -e "${GREEN}Password updated for: $user${NC}"
-    fi
-done
+# ===== SUDO/ADMIN USERS =====
+echo -e "${YELLOW}Step 3: Managing Administrator Access...${NC}"
+echo "Current sudo group members:"
+grep -Po '^sudo.+:\K.*
 echo ""
 
 # ===== PASSWORD CONFIGURATION =====
