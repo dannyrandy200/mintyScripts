@@ -48,31 +48,24 @@ for user in $(awk -F: '$3 >= 1000 && $7 !~ /nologin|false/ {print $1}' /etc/pass
 done
 echo ""
 
-# ===== SUDO/ADMIN USERS =====
-echo -e "${YELLOW}Step 3: Managing Administrator Access...${NC}"
-echo "Current sudo group members:"
-grep -Po '^sudo.+:\K.*$' /etc/group
+# ===== PASSWORD CONFIGURATION =====
+echo -e "${YELLOW}Step 4: Setting common password for authorized users...${NC}"
+read -sp "Enter new password for all authorized users: " NEW_PASSWORD
 echo ""
-echo "Enter usernames who should have sudo access (space-separated, or press Enter for none):"
-read -r ADMIN_USERS
+read -sp "Confirm password: " CONFIRM_PASSWORD
+echo ""
 
-# Remove all users from sudo group first
-for user in $(grep -Po '^sudo.+:\K.*$' /etc/group | tr ',' ' '); do
-    deluser "$user" sudo 2>/dev/null
-    echo -e "${YELLOW}Removed $user from sudo group${NC}"
-done
-
-# Add authorized admins
-if [ -n "$ADMIN_USERS" ]; then
-    for admin in $ADMIN_USERS; do
-        if id "$admin" &>/dev/null; then
-            usermod -aG sudo "$admin"
-            echo -e "${GREEN}Added $admin to sudo group${NC}"
-        else
-            echo -e "${RED}User $admin does not exist${NC}"
-        fi
-    done
+if [ "$NEW_PASSWORD" != "$CONFIRM_PASSWORD" ]; then
+    echo -e "${RED}Passwords don't match. Exiting.${NC}"
+    exit 1
 fi
+
+for user in "${AUTH_ARRAY[@]}"; do
+    if id "$user" &>/dev/null; then
+        echo "$user:$NEW_PASSWORD" | chpasswd
+        echo -e "${GREEN}Password updated for: $user${NC}"
+    fi
+done
 echo ""
 
 # ===== PASSWORD CONFIGURATION =====
@@ -263,7 +256,7 @@ echo -e "${GREEN}Network parameters hardened!${NC}\n"
 
 # ===== REMOVE SAMBA =====
 echo -e "${YELLOW}Step 12: Removing Samba...${NC}"
-apt-get remove --purge -y samba samba-common samba-common-bin smbclient
+apt-get remove --purge -y "samba*" "smb*"
 apt-get autoremove -y
 echo -e "${GREEN}Samba removed${NC}\n"
 
