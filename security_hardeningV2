@@ -16,15 +16,8 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# ===== SYSTEM UPDATES =====
-echo -e "${YELLOW}Step 1: Updating System...${NC}"
-apt-get update
-apt-get upgrade -y
-apt-get dist-upgrade -y
-echo -e "${GREEN}System updated successfully!${NC}\n"
-
 # ===== USER MANAGEMENT =====
-echo -e "${YELLOW}Step 2: Checking for unauthorized users...${NC}"
+echo -e "${YELLOW}Step 1: Checking for unauthorized users...${NC}"
 echo "Current users with login shells:"
 awk -F: '$7 !~ /nologin|false/ {print $1}' /etc/passwd
 
@@ -49,13 +42,13 @@ done
 echo ""
 
 # ===== SUDO/ADMIN USERS =====
-echo -e "${YELLOW}Step 3: Managing Administrator Access...${NC}"
+echo -e "${YELLOW}Step 2: Managing Administrator Access...${NC}"
 echo "Current sudo group members:"
 grep -Po '^sudo.+:\K.*'
 echo ""
 
 # ===== PASSWORD CONFIGURATION =====
-echo -e "${YELLOW}Step 4: Setting common password for authorized users...${NC}"
+echo -e "${YELLOW}Step 3: Setting common password for authorized users...${NC}"
 read -sp "Enter new password for all authorized users: " NEW_PASSWORD
 echo ""
 read -sp "Confirm password: " CONFIRM_PASSWORD
@@ -75,12 +68,12 @@ done
 echo ""
 
 # ===== DISABLE ROOT LOGIN =====
-echo -e "${YELLOW}Step 5: Disabling root login...${NC}"
+echo -e "${YELLOW}Step 4: Disabling root login...${NC}"
 passwd -l root
 echo -e "${GREEN}Root account locked${NC}\n"
 
 # ===== DISABLE GUEST ACCOUNT =====
-echo -e "${YELLOW}Step 6: Disabling Guest Account...${NC}"
+echo -e "${YELLOW}Step 5: Disabling Guest Account...${NC}"
 mkdir -p /etc/lightdm/lightdm.conf.d
 cat > /etc/lightdm/lightdm.conf.d/50-no-guest.conf <<EOF
 [Seat:*]
@@ -89,7 +82,7 @@ EOF
 echo -e "${GREEN}Guest account disabled!${NC}\n"
 
 # ===== PASSWORD SECURITY REQUIREMENTS =====
-echo -e "${YELLOW}Step 7: Applying password security requirements...${NC}"
+echo -e "${YELLOW}Step 6: Applying password security requirements...${NC}"
 
 # Install password quality checking library
 apt-get install -y libpam-pwquality
@@ -137,7 +130,7 @@ echo "  - Account lockout: 5 failed attempts"
 echo ""
 
 # ===== CONFIGURE SSH =====
-echo -e "${YELLOW}Step 8: Configuring SSH...${NC}"
+echo -e "${YELLOW}Step 7: Configuring SSH...${NC}"
 apt-get install -y openssh-server
 
 # Secure SSH configuration
@@ -162,7 +155,7 @@ systemctl restart ssh
 echo -e "${GREEN}SSH configured and enabled${NC}\n"
 
 # ===== UFW FIREWALL =====
-echo -e "${YELLOW}Step 9: Configuring UFW firewall...${NC}"
+echo -e "${YELLOW}Step 8: Configuring UFW firewall...${NC}"
 apt-get install -y ufw
 
 # Reset UFW to defaults
@@ -184,7 +177,7 @@ ufw status verbose
 echo ""
 
 # ===== SECURE SHARED MEMORY =====
-echo -e "${YELLOW}Step 10: Securing Shared Memory...${NC}"
+echo -e "${YELLOW}Step 9: Securing Shared Memory...${NC}"
 if ! grep -q "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0" /etc/fstab; then
     echo "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0" >> /etc/fstab
     echo -e "${GREEN}Shared memory secured!${NC}"
@@ -194,7 +187,7 @@ fi
 echo ""
 
 # ===== NETWORK HARDENING =====
-echo -e "${YELLOW}Step 11: Hardening Network Parameters...${NC}"
+echo -e "${YELLOW}Step 10: Hardening Network Parameters...${NC}"
 cat >> /etc/sysctl.conf <<EOF
 
 # Security hardening
@@ -241,13 +234,13 @@ sysctl -p
 echo -e "${GREEN}Network parameters hardened!${NC}\n"
 
 # ===== REMOVE SAMBA =====
-echo -e "${YELLOW}Step 12: Removing Samba...${NC}"
+echo -e "${YELLOW}Step 11: Removing Samba...${NC}"
 apt-get remove --purge -y "samba*" "smb*"
 apt-get autoremove -y
 echo -e "${GREEN}Samba removed${NC}\n"
 
 # ===== REMOVE PROHIBITED SOFTWARE =====
-echo -e "${YELLOW}Step 13: Removing prohibited software...${NC}"
+echo -e "${YELLOW}Step 12: Removing prohibited software...${NC}"
 
 PROHIBITED=(
     "john" "john-data" "nmap" "zenmap" "ophcrack" "hydra" "hydra-gtk"
@@ -266,13 +259,13 @@ done
 echo -e "${GREEN}Prohibited software check complete${NC}\n"
 
 # ===== CHECK FOR PROHIBITED MEDIA =====
-echo -e "${YELLOW}Step 14: Checking for prohibited media files...${NC}"
+echo -e "${YELLOW}Step 13: Checking for prohibited media files...${NC}"
 echo "Searching for audio/video files in /home (first 30 results)..."
 find /home -type f \( -name "*.mp3" -o -name "*.mp4" -o -name "*.avi" -o -name "*.mov" -o -name "*.wav" -o -name "*.flac" -o -name "*.mkv" \) 2>/dev/null | head -30
 echo -e "${YELLOW}MANUAL ACTION: Review these files and remove unauthorized media!${NC}\n"
 
 # ===== DISABLE UNNECESSARY SERVICES =====
-echo -e "${YELLOW}Step 15: Disabling unnecessary services...${NC}"
+echo -e "${YELLOW}Step 14: Disabling unnecessary services...${NC}"
 
 SERVICES_TO_DISABLE=(
     "apache2" "nginx" "vsftpd" "ftpd" "telnet" "snmpd"
@@ -289,7 +282,7 @@ done
 echo -e "${GREEN}Unnecessary services disabled!${NC}\n"
 
 # ===== ADDITIONAL SECURITY HARDENING =====
-echo -e "${YELLOW}Step 16: Applying additional security measures...${NC}"
+echo -e "${YELLOW}Step 15: Applying additional security measures...${NC}"
 
 # Disable unused filesystems
 cat > /etc/modprobe.d/disable-filesystems.conf <<EOF
@@ -368,13 +361,20 @@ echo "  - Secured cron"
 echo ""
 
 # ===== RUN ROOTKIT SCAN =====
-echo -e "${YELLOW}Step 17: Running Rootkit Scans...${NC}"
+echo -e "${YELLOW}Step 16: Running Rootkit Scans...${NC}"
 echo "Updating rkhunter database..."
 rkhunter --update
 rkhunter --propupd
 echo "Running quick rkhunter scan..."
 rkhunter --check --skip-keypress --report-warnings-only
 echo -e "${GREEN}Rootkit scan complete! Full log: /var/log/rkhunter.log${NC}\n"
+
+# ===== SYSTEM UPDATES =====
+echo -e "${YELLOW}Step 17: Updating System...${NC}"
+apt-get update
+apt-get upgrade -y
+apt-get dist-upgrade -y
+echo -e "${GREEN}System updated successfully!${NC}\n"
 
 # ===== GENERATE SECURITY REPORT =====
 echo -e "${YELLOW}Step 18: Generating security report...${NC}"
