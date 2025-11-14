@@ -43,8 +43,9 @@ echo ""
 
 # ===== SUDO/ADMIN USERS =====
 echo -e "${YELLOW}Step 2: Managing Administrator Access...${NC}"
-echo "Current sudo group members:"
-grep -Po '^sudo.+:\K.*'
+echo "Creating admin_users.txt with current sudo users..."
+grep -Po '^sudo.+:\K.*' /etc/group | tr ',' '\n' > admin_users.txt
+echo "Created admin_users.txt"
 echo ""
 
 # ===== PASSWORD CONFIGURATION =====
