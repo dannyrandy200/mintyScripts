@@ -51,7 +51,7 @@ echo ""
 # ===== SUDO/ADMIN USERS =====
 echo -e "${YELLOW}Step 3: Managing Administrator Access...${NC}"
 echo "Current sudo group members:"
-grep -Po '^sudo.+:\K.*
+grep -Po '^sudo.+:\K.*'
 echo ""
 
 # ===== PASSWORD CONFIGURATION =====
